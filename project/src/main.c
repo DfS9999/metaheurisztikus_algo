@@ -72,9 +72,29 @@ SDL_AppResult SDL_AppIterate(void * appstate)
     if (g_selected) {
         float x, y;
         SDL_GetMouseState(&x, &y);
-        // TODO change line into rect
-        SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
-        SDL_RenderLine(renderer, x, y, GetX(g_selected), GetY(g_selected));
+        
+        //SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+        //SDL_RenderLine(renderer, x, y, GetX(g_selected), GetY(g_selected));
+        
+        int start_x = GetX(g_selected);
+        int start_y = GetY(g_selected);
+        
+        int w = 4;
+        float dx = x - start_x;
+        float dy = y - start_y;
+        float length = SDL_sqrt(dx*dx + dy*dy);
+        float perpX = (-dy / length) * w;
+        float perpY = (dx  / length) * w;
+        // topleft-topright-bottomright-bottomleft
+        SDL_Vertex vertices[4] = {
+            { .position = { start_x + perpX, start_y + perpY }, .color = { 0, 255, 0, 255 } },
+            { .position = { x + perpX, y + perpY },             .color = { 0, 255, 0, 255 } },
+            { .position = { x - perpX, y - perpY },             .color = { 0, 255, 0, 255 } },
+            { .position = { start_x - perpX, start_y - perpY }, .color = { 0, 255, 0, 255 } }
+        };
+        int indices[] = { 0, 1, 2, 0, 2, 3 };
+        SDL_RenderGeometry(renderer, NULL, vertices, sizeof(vertices)/sizeof(vertices[0]), 
+                                                    indices, sizeof(indices)/sizeof(indices[0]));
     }
     
     SDL_RenderPresent(renderer);
@@ -135,8 +155,6 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
             } else if (g_selected) {
                 // end of line selected
                 // TODO add to rect-line if new edge
-//bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect); 
-//bool SDL_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count);
                 g_selected = 0;
             } else {
                 // first node selected
