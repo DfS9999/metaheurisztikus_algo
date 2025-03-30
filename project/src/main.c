@@ -20,35 +20,69 @@ SDL_Renderer * g_renderer;
 SDL_Texture  * g_circle_texture;
 bool           g_debug;
 uint16_t       g_selected;
+float          g_aco_evap_rate;
+float          g_aco_alpha;          
+float          g_aco_beta;        
 
 struct {
-    uint16_t  capacity;
-    uint16_t  size; 
-    t_coord * centers;
-    uint16_t  (*grids)[4];
+    uint16_t    capacity;
+    uint16_t    size; 
+    t_coord   * centers;
+    uint16_t    (*grids)[4];
+    uint16_t  * edges_caps;
+    uint16_t  * edges_sizes;
+    uint16_t ** edges;
 } NODES;
 
 struct {
-    uint32_t     capacity;
-    uint32_t     size;
+    uint16_t     capacity;
+    uint16_t     size;
     SDL_FColor   color;
     SDL_Vertex * verts;
-    uint32_t   * vidxs;
+    int        * vidxs; // SDL_RenderGeometry() takes ints
+    uint16_t   * a_nodes;
+    uint16_t   * b_nodes;
+    float      * lengths;
+    float      * pheromons;
 } EDGES;
 
 void Init(void) {
-    NODES.capacity = 20;
-    NODES.size     = 1; // 0 invalid idx
-    NODES.centers  = SDL_malloc(NODES.capacity * sizeof(*NODES.centers));
-    NODES.grids    = SDL_calloc(GRIDS_COUNT, sizeof(*NODES.grids));
+    g_aco_evap_rate = 0.1f;
+    g_aco_alpha     = 1.0f;
+    g_aco_beta      = 2.0f;
 
-    EDGES.capacity = 20;
-    EDGES.size     = 0;
-    EDGES.color    = (SDL_FColor) { 0, 255, 0, 255 };
-    EDGES.verts    = SDL_malloc(EDGES.capacity * 4 * sizeof(*EDGES.verts));
-    EDGES.vidxs    = SDL_malloc(EDGES.capacity * 6 * sizeof(*EDGES.vidxs));
-    if (!NODES.centers || !NODES.grids || !EDGES.verts || !EDGES.vidxs) {
-        SDL_Log("Memory allocation failed at line %d.\n", __LINE__);
+    NODES.capacity    = 32;
+    NODES.size        = 1; // 0 invalid idx
+    NODES.centers     = SDL_malloc(NODES.capacity * sizeof(*NODES.centers));
+    NODES.grids       = SDL_calloc(GRIDS_COUNT, sizeof(*NODES.grids));
+    NODES.edges_caps  = SDL_malloc(NODES.capacity * sizeof(*NODES.edges_caps));
+    NODES.edges_sizes = SDL_malloc(NODES.capacity * sizeof(*NODES.edges_sizes));
+    NODES.edges       = SDL_malloc(NODES.capacity * sizeof(*NODES.edges));
+    if (!NODES.centers || !NODES.grids || !NODES.edges_caps || !NODES.edges_sizes || !NODES.edges) {
+        SDL_Log("Memory allocation failed in NODES initizalization.\n");
+        exit(1);
+    }
+    for (int i = 1; i < NODES.capacity; i++) {
+        NODES.edges_caps[i]  = 8;
+        NODES.edges_sizes[i] = 0;
+        NODES.edges[i]       = SDL_malloc(8 * sizeof(*NODES.edges[i])); // TODO rm mallocs
+        if (!NODES.edges[i]) {
+            SDL_Log("Memory allocation failed in NODES initizalization.\n");
+            exit(1);
+        }
+    }
+
+    EDGES.capacity  = 32;
+    EDGES.size      = 0;
+    EDGES.color     = (SDL_FColor) { 0, 255, 0, 255 };
+    EDGES.verts     = SDL_malloc(EDGES.capacity * 4 * sizeof(*EDGES.verts));
+    EDGES.vidxs     = SDL_malloc(EDGES.capacity * 6 * sizeof(*EDGES.vidxs));
+    EDGES.a_nodes   = SDL_malloc(EDGES.capacity * sizeof(*EDGES.a_nodes));
+    EDGES.b_nodes   = SDL_malloc(EDGES.capacity * sizeof(*EDGES.b_nodes));
+    EDGES.lengths   = SDL_malloc(EDGES.capacity * sizeof(*EDGES.lengths));
+    EDGES.pheromons = SDL_malloc(EDGES.capacity * sizeof(*EDGES.pheromons));
+    if (!EDGES.verts || !EDGES.vidxs || !EDGES.a_nodes || !EDGES.b_nodes || !EDGES.lengths || !EDGES.pheromons) {
+        SDL_Log("Memory allocation failed EDGE in initizalization.\n");
         exit(1);
     }
 }
@@ -130,80 +164,71 @@ void RenderNodes(void) {
     }
 }
 
-uint16_t SelectNode(int x, int y) {
+uint16_t SearchNode(int x, int y, int area) {
     if (x < GRID_SIZE || x > WIN_WIDTH - GRID_SIZE || y < GRID_SIZE || y > WIN_HEIGHT - GRID_SIZE) {
        SDL_Log("Invalid position %d:%d.\n", x, y);
        return 0;
     }
+
     int grid_idx = ((int)(y / GRID_SIZE) * GRIDS_WIDTH) + (x / GRID_SIZE);
-    for (size_t i = 0; i < 4; i++) {
-        uint16_t circle_idx = NODES.grids[grid_idx][i];
-        if (circle_idx) {
-            uint16_t circle_x = NODES.centers[circle_idx].x;
-            uint16_t circle_y = NODES.centers[circle_idx].y;
-            int distance = (circle_x - x) * (circle_x - x) + (circle_y - y) * (circle_y - y);
-            if (distance <= CIRCLE_RAD * CIRCLE_RAD) {
-                SDL_Log("Coordinate is inside a circle. (d^2=%d)\n", distance);
-                return circle_idx;
+    for (int r = -1; r <= 1; r++) {
+        for (int c = -1; c <= 1; c++) {
+            int n_grid_idx = grid_idx + (r * GRIDS_WIDTH) + c;
+            for (size_t j = 0; j < 4; j++) {
+                uint16_t circle_idx = NODES.grids[n_grid_idx][j];
+                if (circle_idx) {
+                    uint16_t circle_x = NODES.centers[circle_idx].x;
+                    uint16_t circle_y = NODES.centers[circle_idx].y;
+                    int dx = circle_x - x;
+                    int dy = circle_y - y;
+                    int distance = dx * dx + dy * dy;
+                    if (distance <= area) { return circle_idx; }
+                }
             }
         }
     }
     return 0;
 }
 
+uint16_t SelectNode(int x, int y) {
+    int dsquared = CIRCLE_RAD * CIRCLE_RAD;
+    return SearchNode(x, y, dsquared);
+}
+
 void AddNewNode(int x, int y) {
-    if (x < GRID_SIZE || x > WIN_WIDTH - GRID_SIZE || y < GRID_SIZE || y > WIN_HEIGHT - GRID_SIZE) {
-        SDL_Log("Invalid position %d:%d.\n", x, y);
+    int border_min   = GRID_SIZE  + CIRCLE_RAD;
+    int border_max_x = WIN_WIDTH  - GRID_SIZE - CIRCLE_RAD;
+    int border_max_y = WIN_HEIGHT - GRID_SIZE - CIRCLE_RAD;
+    x = x < border_min   ? border_min   : x;
+    x = x > border_max_x ? border_max_x : x;
+    y = y < border_min   ? border_min   : y;
+    y = y > border_max_y ? border_max_y : y;
+
+    int dsquared = CIRCLE_SIZE * CIRCLE_SIZE * 4;
+    if (SearchNode(x, y, dsquared)) {
+        SDL_Log("Too close to another circle.\n");
         return;
     }
 
-    // shift inside from the edges
-    if (x < GRID_SIZE + CIRCLE_RAD) { x = GRID_SIZE + CIRCLE_RAD; }
-    else if (x > WIN_WIDTH - GRID_SIZE - CIRCLE_RAD)  { x = WIN_WIDTH  - GRID_SIZE - CIRCLE_RAD; }
-    if (y < GRID_SIZE + CIRCLE_RAD) { y = GRID_SIZE + CIRCLE_RAD; }
-    else if (y > WIN_HEIGHT - GRID_SIZE - CIRCLE_RAD) { y = WIN_HEIGHT - GRID_SIZE - CIRCLE_RAD; }
+    if (NODES.size >= NODES.capacity) {
+        NODES.capacity *= 2;
+        NODES.centers  = SDL_realloc(NODES.centers, NODES.capacity * sizeof(*NODES.centers));
+        if (!NODES.centers) {
+            SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
+            exit(1);
+        }
+    }
 
-    // check collisions
     int grid_idx = ((int)(y / GRID_SIZE) * GRIDS_WIDTH) + (x / GRID_SIZE);
     for (int i = 0; i < 4; i++) {
-        // checking is there any empty space left in the current grid
         if (NODES.grids[grid_idx][i] == 0) {
-            // checking 3x3 grids' circles
-            for (int r = -1; r <= 1; r++) {
-                for (int c = -1; c <= 1; c++) {
-                    int n_grid_idx = grid_idx + (r * GRIDS_WIDTH) + c;
-                    for (size_t j = 0; j < 4; j++) {
-                        uint16_t n_circle_idx = NODES.grids[n_grid_idx][j];
-                        if (n_circle_idx) {
-                            uint16_t neighbour_x = NODES.centers[n_circle_idx].x;
-                            uint16_t neighbour_y = NODES.centers[n_circle_idx].y;
-                            int distance = (neighbour_x - x) * (neighbour_x - x) + (neighbour_y - y) * (neighbour_y - y);
-                            if (distance <= CIRCLE_SIZE * CIRCLE_SIZE * 4) {
-                                SDL_Log("Too close to another circle. (d^2=%d)\n", distance);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            // adding the new circle
-            if (NODES.size >= NODES.capacity) {
-                NODES.capacity *= 2;
-                NODES.centers  = SDL_realloc(NODES.centers, NODES.capacity * sizeof(*NODES.centers));
-                if (!NODES.centers) {
-                    SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
-                    exit(1);
-                }
-            }
-            NODES.centers[NODES.size].x = x;
-            NODES.centers[NODES.size].y = y;
+            NODES.centers[NODES.size] = (t_coord) { x, y };
             NODES.grids[grid_idx][i] = NODES.size;
             NODES.size++;
-            SDL_Log("New circle placed: %d:%d, grid:%d/%d.\n", x, y, grid_idx, i);
             return;
         }
     }
-    SDL_Log("No space left in the current grid.\n");
+    SDL_Log("Grid is full.\n");
 }
 
 void DrawEdge(int aX, int aY, int bX, int bY, int width, SDL_FColor * color) {
