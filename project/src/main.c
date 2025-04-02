@@ -23,6 +23,8 @@ typedef struct { uint16_t x; uint16_t y; } coord_t;
 SDL_Window   * g_window;
 SDL_Renderer * g_renderer;
 SDL_Texture  * g_circle_texture;
+SDL_Texture  * g_ant_texture;
+bool           g_run;
 bool           g_debug;
 uint16_t       g_selected;
 uint16_t       g_aco_nest;
@@ -30,6 +32,20 @@ uint16_t       g_aco_food;
 float          g_aco_evap_rate;
 float          g_aco_alpha;          
 float          g_aco_beta;        
+
+#define ANT_SPEED   100.0f
+#define ANT_PATH    "./src/ant.png"
+#define ANT_SIZE    ((int)(CIRCLE_SIZE / 4))
+#define ANT_RAD      (ANT_SIZE / 2)
+struct Ant {
+    uint16_t src_node;
+    uint16_t des_node;
+    uint16_t edge;
+    float    edge_progress;
+};
+int g_ants_count;
+float g_last_time;
+struct Ant * ANTS;
 
 struct {
     uint16_t    capacity;
@@ -47,6 +63,7 @@ struct {
     SDL_FColor   color;
     SDL_Vertex * verts;
     int        * vidxs; // SDL_RenderGeometry() takes ints
+    float      * widths;
     uint16_t   * a_nodes;
     uint16_t   * b_nodes;
     float      * lengths;
@@ -63,16 +80,19 @@ void UpdateEdgeWidth(uint16_t edge, float multiplier) {
     float dX     = bX - aX;
     float dY     = bY - aY;
     float length = EDGES.lengths[edge];
-    float pX     = (-dY / length) * MIN_EDGE_W * multiplier;
-    float pY     = ( dX / length) * MIN_EDGE_W * multiplier;
+    //TODO pheromonbol 
+    EDGES.widths[edge] *= multiplier;
+    float pX     = (-dY / length) * (EDGES.widths[edge] / 2);
+    float pY     = ( dX / length) * (EDGES.widths[edge] / 2);
     int vstart = edge * 4;
-    EDGES.verts[vstart + 0].position = (SDL_FPoint) { aX + pX, aY + pY }; exit(1); // TODO 
+    EDGES.verts[vstart + 0].position = (SDL_FPoint) { aX + pX, aY + pY }; 
     EDGES.verts[vstart + 1].position = (SDL_FPoint) { bX + pX, bY + pY };
     EDGES.verts[vstart + 2].position = (SDL_FPoint) { bX - pX, bY - pY };
     EDGES.verts[vstart + 3].position = (SDL_FPoint) { aX - pX, aY - pY };
 }
 
 void Init(void) {
+    g_last_time     = (float)SDL_GetTicks();
     g_selected      = EMPTY;
     g_aco_evap_rate = 0.1f;
     g_aco_alpha     = 1.0f;
@@ -107,14 +127,26 @@ void Init(void) {
     EDGES.color     = (SDL_FColor) { 0, 255, 0, 255 };
     EDGES.verts     = SDL_malloc(EDGES.capacity * 4 * sizeof(*EDGES.verts));
     EDGES.vidxs     = SDL_malloc(EDGES.capacity * 6 * sizeof(*EDGES.vidxs));
+    EDGES.widths    = SDL_malloc(EDGES.capacity * sizeof(*EDGES.widths));
     EDGES.a_nodes   = SDL_malloc(EDGES.capacity * sizeof(*EDGES.a_nodes));
     EDGES.b_nodes   = SDL_malloc(EDGES.capacity * sizeof(*EDGES.b_nodes));
     EDGES.lengths   = SDL_malloc(EDGES.capacity * sizeof(*EDGES.lengths));
     EDGES.pheromons = SDL_malloc(EDGES.capacity * sizeof(*EDGES.pheromons));
-    if (!EDGES.verts || !EDGES.vidxs || !EDGES.a_nodes || !EDGES.b_nodes || !EDGES.lengths || !EDGES.pheromons) {
+    if (!EDGES.verts || !EDGES.vidxs || !EDGES.widths || !EDGES.a_nodes || !EDGES.b_nodes || !EDGES.lengths || !EDGES.pheromons) {
         SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
         exit(1);
     }
+
+    g_ants_count = 10000;
+    ANTS = SDL_malloc(g_ants_count * sizeof(*ANTS));
+    if (!ANTS) {
+        SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
+        exit(1);
+    }
+    for (int i = 0; i < g_ants_count; i++) {
+        ANTS[i] = (struct Ant) { .src_node = 0, .des_node = 1/*TODO*/, .edge = 0, .edge_progress = 0.0f };
+    }
+
 }
 
 void RenderEdges(void) {
@@ -174,11 +206,12 @@ void AddNewEdge(uint16_t a_node, uint16_t b_node) {
         EDGES.capacity *= 2;
         EDGES.verts     = SDL_realloc(EDGES.verts,     EDGES.capacity * 4 * sizeof(*EDGES.verts));
         EDGES.vidxs     = SDL_realloc(EDGES.vidxs,     EDGES.capacity * 6 * sizeof(*EDGES.vidxs));
+        EDGES.widths    = SDL_realloc(EDGES.widths,    EDGES.capacity * sizeof(*EDGES.widths));
         EDGES.a_nodes   = SDL_realloc(EDGES.a_nodes,   EDGES.capacity * sizeof(*EDGES.a_nodes));
         EDGES.b_nodes   = SDL_realloc(EDGES.b_nodes,   EDGES.capacity * sizeof(*EDGES.b_nodes));
         EDGES.lengths   = SDL_realloc(EDGES.lengths,   EDGES.capacity * sizeof(*EDGES.lengths));
         EDGES.pheromons = SDL_realloc(EDGES.pheromons, EDGES.capacity * sizeof(*EDGES.pheromons));
-        if (!EDGES.verts || !EDGES.vidxs || !EDGES.a_nodes || !EDGES.b_nodes || !EDGES.lengths || !EDGES.pheromons) {
+        if (!EDGES.verts || !EDGES.vidxs || !EDGES.widths || !EDGES.a_nodes || !EDGES.b_nodes || !EDGES.lengths || !EDGES.pheromons) {
             SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
             exit(1);
         }
@@ -210,13 +243,14 @@ void AddNewEdge(uint16_t a_node, uint16_t b_node) {
     EDGES.vidxs[EDGES.size * 6 + 4] = vstart + 2;
     EDGES.vidxs[EDGES.size * 6 + 5] = vstart + 3;
     
+    EDGES.widths[EDGES.size]    = MIN_EDGE_W;
     EDGES.a_nodes[EDGES.size]   = a_node;
     EDGES.b_nodes[EDGES.size]   = b_node;
     EDGES.lengths[EDGES.size]   = length;
     EDGES.pheromons[EDGES.size] = 0;
 
+    SDL_Log("New edge added. Len=%f\n", EDGES.lengths[EDGES.size]);
     EDGES.size++;
-    SDL_Log("New edge added.\n");
 }
 
 void DrawCircle(int x, int y) {
@@ -350,6 +384,37 @@ void DrawEdge(int aX, int aY, int bX, int bY, int width, SDL_FColor * color) {
     SDL_RenderGeometry(g_renderer, NULL, verts, 4, indices, 6);
 }
 
+void UpdateAnts(uint64_t time) {
+    float elapsed = (time - g_last_time) / 1000.f;
+    for (int i = 0; i < g_ants_count; i++) {
+        float edge_length = EDGES.lengths[ANTS[i].edge];
+        ANTS[i].edge_progress += elapsed / (edge_length / ANT_SPEED);
+
+        if (ANTS[i].edge_progress >= 1.0f) {
+            uint16_t new_src = ANTS[i].des_node; // arrived
+            ANTS[i].src_node = new_src;
+            if (NODES.edges_sizes[new_src]) {
+                int r            = SDL_rand(NODES.edges_sizes[new_src]); // [0..n-1]
+                uint16_t edge    = NODES.edges[new_src][r];
+                ANTS[i].edge     = edge;
+                ANTS[i].des_node = (EDGES.a_nodes[edge] == new_src) ? EDGES.b_nodes[edge] : EDGES.a_nodes[edge];
+            }
+            ANTS[i].edge_progress = 0.0f;
+        }
+    }
+    g_last_time = time;
+}
+
+void RenderAnts(void) {
+    for (int i = 0; i < g_ants_count; i++) {
+        coord_t src  = NODES.centers[ANTS[i].src_node]; 
+        coord_t dest = NODES.centers[ANTS[i].des_node];
+        int x = src.x + (dest.x - src.x) * ANTS[i].edge_progress - ANT_RAD;
+        int y = src.y + (dest.y - src.y) * ANTS[i].edge_progress - ANT_RAD;
+        SDL_RenderTexture(g_renderer, g_ant_texture, NULL, &(SDL_FRect){ x, y, ANT_SIZE, ANT_SIZE });
+    }
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////////
 ///SDL 
@@ -358,6 +423,8 @@ void DrawEdge(int aX, int aY, int bX, int bY, int width, SDL_FColor * color) {
 // 'main' function, running every frame
 SDL_AppResult SDL_AppIterate(void * appstate)
 {
+    uint64_t time = SDL_GetTicks();
+
     SDL_SetRenderDrawColor(g_renderer, 240, 240, 240, 255);
     SDL_RenderClear(g_renderer);
 
@@ -368,6 +435,11 @@ SDL_AppResult SDL_AppIterate(void * appstate)
 
     RenderEdges();
     RenderNodes();
+
+    if (g_run) {
+        UpdateAnts(time);
+        RenderAnts();
+    }
 
     if (g_selected != EMPTY) {
         float x, y;
@@ -394,10 +466,19 @@ SDL_AppResult SDL_AppInit(void ** appstate, int argc, char * argv[])
         SDL_Log("Couldn't create window/renderer: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
+    
+    SDL_Time t = 0;
+    SDL_GetCurrentTime(&t);
+    SDL_srand(t); // sdl:'This should be called on the same thread that calls SDL_rand()'
 
     g_circle_texture = IMG_LoadTexture(g_renderer, CIRCLE_PATH);
     if (!g_circle_texture) {
         SDL_Log("Couldn't load %s: %s", CIRCLE_PATH, SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+    g_ant_texture    = IMG_LoadTexture(g_renderer, ANT_PATH);
+    if (!g_ant_texture) {
+        SDL_Log("Couldn't load %s: %s", ANT_PATH, SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
@@ -423,6 +504,9 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
         }
         if (event->key.scancode == SDL_SCANCODE_L) {
             for (uint16_t i = 0; i < EDGES.size; i++) { UpdateEdgeWidth(i, 1.2f); }
+        }
+        if (event->key.scancode == SDL_SCANCODE_R) {
+            g_run = true;
         }
     }
     
