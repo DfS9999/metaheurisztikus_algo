@@ -6,16 +6,21 @@
 #define WIN_WIDTH       1280
 #define WIN_HEIGHT      1024
 #define CIRCLE_PATH     "./src/circle.png"
-#define CIRCLE_SIZE     ((int)(WIN_HEIGHT / 24))
+#define CIRCLE_FOOD_PATH     "./src/circle_outline_yellow.png"
+#define CIRCLE_NEST_PATH     "./src/circle_outline_red.png"
+#define CIRCLE_SIZE     ((int)(WIN_HEIGHT / 32))
 #define CIRCLE_RAD      (CIRCLE_SIZE / 2)
 #define GRID_SIZE       (CIRCLE_SIZE * 2)
 #define GRIDS_WIDTH     ((int)((WIN_WIDTH  + GRID_SIZE - 1) / GRID_SIZE))
 #define GRIDS_HEIGHT    ((int)((WIN_HEIGHT + GRID_SIZE - 1) / GRID_SIZE))
 #define GRIDS_COUNT     (GRIDS_WIDTH * GRIDS_HEIGHT)
 #define BASE_EDGECAP    8
+#define MAX_EDGE_PER_NODE    256
 #define MIN_EDGE_W      2
 #define MAX_EDGE_W      CIRCLE_SIZE
 #define EMPTY           (0xFFFF)
+
+#define EDGE_PHEROMON_START_VALUE   1.0f
 
 typedef uint16_t idx_t;
 typedef struct { uint16_t x; uint16_t y; } coord_t;
@@ -23,28 +28,39 @@ typedef struct { uint16_t x; uint16_t y; } coord_t;
 SDL_Window   * g_window;
 SDL_Renderer * g_renderer;
 SDL_Texture  * g_circle_texture;
-SDL_Texture  * g_ant_texture;
+SDL_Texture  * g_circle_nest_texture;
+SDL_Texture  * g_circle_food_texture;
+SDL_Texture  * g_foraging_texture;
+SDL_Texture  * g_homing_texture;
 bool           g_run;
 bool           g_debug;
 uint16_t       g_selected;
-uint16_t       g_aco_nest;
-uint16_t       g_aco_food;
+uint16_t       g_nest;
+uint16_t       g_food;
 float          g_aco_evap_rate;
 float          g_aco_alpha;          
 float          g_aco_beta;        
 
 #define ANT_SPEED   100.0f
-#define ANT_PATH    "./src/ant.png"
-#define ANT_SIZE    ((int)(CIRCLE_SIZE / 4))
+#define ANT_FORAGING_PATH    "./src/ant.png"
+#define ANT_HOMING_PATH    "./src/ant_yellow.png"
+#define ANT_SIZE    ((int)(CIRCLE_SIZE / 2))
 #define ANT_RAD      (ANT_SIZE / 2)
+typedef uint8_t state_t;
+#define FORAGING 0
+#define HOMING   1
+#define MAX_ANT_PATH    (GRIDS_COUNT)
 struct Ant {
     uint16_t src_node;
     uint16_t des_node;
     uint16_t edge;
+    state_t  state;
+    uint16_t visited_idx;
     float    edge_progress;
+    float    path_length;
+    uint16_t visited_edges[MAX_ANT_PATH];
 };
 int g_ants_count;
-float g_last_time;
 struct Ant * ANTS;
 
 struct {
@@ -70,30 +86,53 @@ struct {
     float      * pheromons;
 } EDGES;
 
-void UpdateEdgeWidth(uint16_t edge, float multiplier) {
+#define EDGE_W_TRESHOLD 10.0f
+void UpdateEdgeWidth(uint16_t edge) {
+    float pheromone = EDGES.pheromons[edge];
+    float ratio = (pheromone - EDGE_PHEROMON_START_VALUE) / (EDGE_W_TRESHOLD - EDGE_PHEROMON_START_VALUE);
+    if (ratio > 1.0f) ratio = 1.0f;
+    else if (ratio < 0.0f) ratio = 0.0f;
+    EDGES.widths[edge] = MIN_EDGE_W + ratio * (MAX_EDGE_W - MIN_EDGE_W);
+    
     uint16_t a_node = EDGES.a_nodes[edge];
     uint16_t b_node = EDGES.b_nodes[edge];
     uint16_t aX = NODES.centers[a_node].x;
     uint16_t aY = NODES.centers[a_node].y;
     uint16_t bX = NODES.centers[b_node].x;
     uint16_t bY = NODES.centers[b_node].y;
-    float dX     = bX - aX;
-    float dY     = bY - aY;
+    float dX = bX - aX;
+    float dY = bY - aY;
     float length = EDGES.lengths[edge];
-    //TODO pheromonbol 
-    EDGES.widths[edge] *= multiplier;
-    float pX     = (-dY / length) * (EDGES.widths[edge] / 2);
-    float pY     = ( dX / length) * (EDGES.widths[edge] / 2);
+    float pX = (-dY / length) * (EDGES.widths[edge] / 2);
+    float pY = ( dX / length) * (EDGES.widths[edge] / 2);
     int vstart = edge * 4;
-    EDGES.verts[vstart + 0].position = (SDL_FPoint) { aX + pX, aY + pY }; 
-    EDGES.verts[vstart + 1].position = (SDL_FPoint) { bX + pX, bY + pY };
-    EDGES.verts[vstart + 2].position = (SDL_FPoint) { bX - pX, bY - pY };
-    EDGES.verts[vstart + 3].position = (SDL_FPoint) { aX - pX, aY - pY };
+    EDGES.verts[vstart + 0].position = (SDL_FPoint){ aX + pX, aY + pY };
+    EDGES.verts[vstart + 1].position = (SDL_FPoint){ bX + pX, bY + pY };
+    EDGES.verts[vstart + 2].position = (SDL_FPoint){ bX - pX, bY - pY };
+    EDGES.verts[vstart + 3].position = (SDL_FPoint){ aX - pX, aY - pY };
+}
+
+void AntLeaveNest(struct Ant * ant) {
+    ant->src_node = g_nest;
+    int r = SDL_rand(NODES.edges_sizes[g_nest]);
+    if (NODES.edges_sizes[g_nest] < 1) {
+        SDL_Log("Nest has no exit.\n");
+        return;
+    }
+    ant->edge           = NODES.edges[g_nest][r];
+    ant->des_node       = (EDGES.a_nodes[ant->edge] == ant->src_node) ? EDGES.b_nodes[ant->edge] : EDGES.a_nodes[ant->edge];
+    ant->state          = FORAGING;
+    ant->visited_idx    = 0;
+    ant->edge_progress  = 0.0f;
+    ant->path_length    = 0.0f;
+    ant->visited_edges[ant->visited_idx++] = ant->edge;
+    ant->path_length += EDGES.lengths[ant->edge];
 }
 
 void Init(void) {
-    g_last_time     = (float)SDL_GetTicks();
     g_selected      = EMPTY;
+    g_nest          = EMPTY;
+    g_food          = EMPTY;
     g_aco_evap_rate = 0.1f;
     g_aco_alpha     = 1.0f;
     g_aco_beta      = 2.0f;
@@ -137,16 +176,12 @@ void Init(void) {
         exit(1);
     }
 
-    g_ants_count = 10000;
+    g_ants_count = 1;
     ANTS = SDL_malloc(g_ants_count * sizeof(*ANTS));
     if (!ANTS) {
         SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
         exit(1);
     }
-    for (int i = 0; i < g_ants_count; i++) {
-        ANTS[i] = (struct Ant) { .src_node = 0, .des_node = 1/*TODO*/, .edge = 0, .edge_progress = 0.0f };
-    }
-
 }
 
 void RenderEdges(void) {
@@ -247,9 +282,8 @@ void AddNewEdge(uint16_t a_node, uint16_t b_node) {
     EDGES.a_nodes[EDGES.size]   = a_node;
     EDGES.b_nodes[EDGES.size]   = b_node;
     EDGES.lengths[EDGES.size]   = length;
-    EDGES.pheromons[EDGES.size] = 0;
+    EDGES.pheromons[EDGES.size] = EDGE_PHEROMON_START_VALUE;
 
-    SDL_Log("New edge added. Len=%f\n", EDGES.lengths[EDGES.size]);
     EDGES.size++;
 }
 
@@ -384,25 +418,105 @@ void DrawEdge(int aX, int aY, int bX, int bY, int width, SDL_FColor * color) {
     SDL_RenderGeometry(g_renderer, NULL, verts, 4, indices, 6);
 }
 
-void UpdateAnts(uint64_t time) {
-    float elapsed = (time - g_last_time) / 1000.f;
-    for (int i = 0; i < g_ants_count; i++) {
-        float edge_length = EDGES.lengths[ANTS[i].edge];
-        ANTS[i].edge_progress += elapsed / (edge_length / ANT_SPEED);
-
-        if (ANTS[i].edge_progress >= 1.0f) {
-            uint16_t new_src = ANTS[i].des_node; // arrived
-            ANTS[i].src_node = new_src;
-            if (NODES.edges_sizes[new_src]) {
-                int r            = SDL_rand(NODES.edges_sizes[new_src]); // [0..n-1]
-                uint16_t edge    = NODES.edges[new_src][r];
-                ANTS[i].edge     = edge;
-                ANTS[i].des_node = (EDGES.a_nodes[edge] == new_src) ? EDGES.b_nodes[edge] : EDGES.a_nodes[edge];
-            }
-            ANTS[i].edge_progress = 0.0f;
+void AntChooseNextDestRandomly(struct Ant * ant) {
+    uint16_t current = ant->des_node;
+    int r = SDL_rand(NODES.edges_sizes[current]);
+    if (NODES.edges_sizes[current] > 1) {
+        while (NODES.edges[current][r] == ant->edge) {
+            r = SDL_rand(NODES.edges_sizes[current]);
         }
     }
-    g_last_time = time;
+    ant->src_node       = current;
+    ant->edge           = NODES.edges[current][r];
+    ant->des_node       = (EDGES.a_nodes[ant->edge] == ant->src_node) ? EDGES.b_nodes[ant->edge] : EDGES.a_nodes[ant->edge];
+    ant->edge_progress  = 0.0f;
+}
+
+float probability_buffer[MAX_EDGE_PER_NODE];
+uint16_t valid_edges_buffer[MAX_EDGE_PER_NODE];
+
+void AntChooseNextDestForaging(struct Ant * ant) {
+    uint16_t current_node = ant->des_node;
+    uint16_t next_edge = EMPTY;
+    int valid_count = 0;
+    uint16_t size = NODES.edges_sizes[current_node];
+    for (int i = 0; i < size; i++) {
+        uint16_t e = NODES.edges[current_node][i];
+        if (e != ant->edge || size == 1)
+            valid_edges_buffer[valid_count++] = e;
+    }
+    float total_p = 0;
+    for (int i = 0; i < valid_count; i++) {
+        uint16_t e = valid_edges_buffer[i];
+        float pheromone   = SDL_powf(EDGES.pheromons[e], g_aco_alpha);
+        float heuristic   = SDL_powf((1.0f / EDGES.lengths[e]), g_aco_beta);
+        float probability = pheromone * heuristic;
+        probability_buffer[i] = probability;
+        total_p += probability;
+    }
+    float r = SDL_randf() * total_p, sum = 0;
+    for (int i = 0; i < valid_count; i++) {
+        sum += probability_buffer[i];
+        if (r <= sum) {
+            next_edge = valid_edges_buffer[i];
+            break;
+        }
+    }
+    // unloop TODO
+}
+
+
+float g_aco_q = 10000.f;
+void AntChooseNextDestHoming(struct Ant * ant) {
+    uint16_t next_edge = ant->visited_edges[--ant->visited_idx];
+    ant->src_node   = ant->des_node;
+    ant->edge       = next_edge;
+    ant->des_node   = (EDGES.a_nodes[ant->edge] == ant->src_node) ? EDGES.b_nodes[ant->edge] : EDGES.a_nodes[ant->edge];
+    ant->edge_progress = 0.0f;
+    float deposit = g_aco_q / ant->path_length;
+    EDGES.pheromons[next_edge] += deposit;
+
+    SDL_Log("Homing on [%d] edge. Added %f pheromon to edge (total=%f).\n", ant->edge, deposit, EDGES.pheromons[next_edge]);
+}
+
+void (*AntChooseNext[])(struct Ant *) = { AntChooseNextDestForaging, AntChooseNextDestHoming };
+
+void AntPickMethod(struct Ant * ant) {
+    if (ant->des_node == g_food) { 
+        SDL_Log("Ant found food. Homing.\n");
+        ant->state = HOMING; 
+    }
+    else if (ant->des_node == g_nest || ant->visited_idx >= MAX_ANT_PATH) {
+        SDL_Log("Ant at nest or path full. Foraging.\n");
+        ant->src_node      = g_nest;
+        ant->edge          = EMPTY;
+        ant->des_node      = g_nest; 
+        ant->state         = FORAGING;
+        ant->visited_idx   = 0;
+        ant->edge_progress = 0.0f;
+        ant->path_length   = 0.0f;
+    }
+
+    AntChooseNext[ant->state](ant);
+}
+
+void PheromonEvaporation(float elapsed_time) {
+    for (uint16_t i = 0; i < EDGES.size; i++) {
+        EDGES.pheromons[i] *= (1.0f - g_aco_evap_rate * elapsed_time);
+        if (EDGES.pheromons[i] < 0.f) EDGES.pheromons[i] = 0.f;
+        UpdateEdgeWidth(i);
+    }
+}
+
+void UpdateAnts(float elapsed_time) {
+    for (int i = 0; i < g_ants_count; i++) {
+        float edge_length = EDGES.lengths[ANTS[i].edge];
+        ANTS[i].edge_progress += (elapsed_time * ANT_SPEED) / edge_length;
+
+        if (ANTS[i].edge_progress >= 1.0f) { // ARRIVED
+            AntPickMethod(&ANTS[i]);
+        }
+    }
 }
 
 void RenderAnts(void) {
@@ -411,10 +525,22 @@ void RenderAnts(void) {
         coord_t dest = NODES.centers[ANTS[i].des_node];
         int x = src.x + (dest.x - src.x) * ANTS[i].edge_progress - ANT_RAD;
         int y = src.y + (dest.y - src.y) * ANTS[i].edge_progress - ANT_RAD;
-        SDL_RenderTexture(g_renderer, g_ant_texture, NULL, &(SDL_FRect){ x, y, ANT_SIZE, ANT_SIZE });
+        SDL_Texture * texture = ANTS[i].state == FORAGING ? g_foraging_texture : g_homing_texture;
+        SDL_RenderTexture(g_renderer, texture, NULL, &(SDL_FRect){ x, y, ANT_SIZE, ANT_SIZE });
     }
 }
 
+void RenderNest(void) {
+    int x = NODES.centers[g_nest].x - CIRCLE_RAD*1.5f;
+    int y = NODES.centers[g_nest].y - CIRCLE_RAD*1.5f;
+    SDL_RenderTexture(g_renderer, g_circle_nest_texture, NULL, &(SDL_FRect){ x, y, CIRCLE_RAD*3, CIRCLE_RAD*3 });
+}
+
+void RenderFood(void) {
+    int x = NODES.centers[g_food].x - CIRCLE_RAD*1.5f;
+    int y = NODES.centers[g_food].y - CIRCLE_RAD*1.5f;
+    SDL_RenderTexture(g_renderer, g_circle_food_texture, NULL, &(SDL_FRect){ x, y, CIRCLE_RAD*3, CIRCLE_RAD*3 });
+}
 
 ///////////////////////////////////////////////////////////////////////////////////
 ///SDL 
@@ -423,7 +549,10 @@ void RenderAnts(void) {
 // 'main' function, running every frame
 SDL_AppResult SDL_AppIterate(void * appstate)
 {
-    uint64_t time = SDL_GetTicks();
+    static uint64_t last_time   = 0;
+    uint64_t current_time       = SDL_GetTicks();
+    float elapsed_time          = (current_time - last_time) / 1000.f;
+    last_time                   = current_time;
 
     SDL_SetRenderDrawColor(g_renderer, 240, 240, 240, 255);
     SDL_RenderClear(g_renderer);
@@ -433,13 +562,18 @@ SDL_AppResult SDL_AppIterate(void * appstate)
         SDL_RenderRect(g_renderer, &(SDL_FRect){ GRID_SIZE, GRID_SIZE, WIN_WIDTH-(2*GRID_SIZE), WIN_HEIGHT-(2*GRID_SIZE) });
     }
 
+    if (g_nest != EMPTY) RenderNest();
+    if (g_food != EMPTY) RenderFood();
+
     RenderEdges();
-    RenderNodes();
 
     if (g_run) {
-        UpdateAnts(time);
+        UpdateAnts(elapsed_time);
+        PheromonEvaporation(elapsed_time);
         RenderAnts();
     }
+    
+    RenderNodes();
 
     if (g_selected != EMPTY) {
         float x, y;
@@ -472,13 +606,16 @@ SDL_AppResult SDL_AppInit(void ** appstate, int argc, char * argv[])
     SDL_srand(t); // sdl:'This should be called on the same thread that calls SDL_rand()'
 
     g_circle_texture = IMG_LoadTexture(g_renderer, CIRCLE_PATH);
-    if (!g_circle_texture) {
-        SDL_Log("Couldn't load %s: %s", CIRCLE_PATH, SDL_GetError());
+    g_circle_nest_texture = IMG_LoadTexture(g_renderer, CIRCLE_NEST_PATH);
+    g_circle_food_texture = IMG_LoadTexture(g_renderer, CIRCLE_FOOD_PATH);
+    if (!g_circle_texture || !g_circle_nest_texture || !g_circle_food_texture) {
+        SDL_Log("Couldn't load texture: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
-    g_ant_texture    = IMG_LoadTexture(g_renderer, ANT_PATH);
-    if (!g_ant_texture) {
-        SDL_Log("Couldn't load %s: %s", ANT_PATH, SDL_GetError());
+    g_foraging_texture  = IMG_LoadTexture(g_renderer, ANT_FORAGING_PATH);
+    g_homing_texture    = IMG_LoadTexture(g_renderer, ANT_HOMING_PATH);
+    if (!g_foraging_texture || !g_homing_texture) {
+        SDL_Log("Couldn't load texture: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
@@ -499,14 +636,15 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
         if (event->key.scancode == SDL_SCANCODE_D) {
             g_debug ^= 1;
         }
-        if (event->key.scancode == SDL_SCANCODE_K) {
-            for (uint16_t i = 0; i < EDGES.size; i++) { UpdateEdgeWidth(i, 0.8f); }
-        }
-        if (event->key.scancode == SDL_SCANCODE_L) {
-            for (uint16_t i = 0; i < EDGES.size; i++) { UpdateEdgeWidth(i, 1.2f); }
-        }
-        if (event->key.scancode == SDL_SCANCODE_R) {
-            g_run = true;
+        if (event->key.scancode == SDL_SCANCODE_RETURN) {
+            if (g_nest != EMPTY && g_food != EMPTY) {
+                //g_last_time = (float)SDL_GetTicks();
+                SDL_Log("Nest:%d Food:%d\n", g_nest, g_food);
+                for (int i = 0; i < g_ants_count; i++) {
+                    AntLeaveNest(&ANTS[i]);
+                }
+                g_run = true;
+            } 
         }
     }
     
@@ -531,9 +669,15 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
                 AddNewNode(x, y);
             }
         }
-    } else {
-        // TODO cancel & delete
-        //
+        else if (event->button.button == SDL_BUTTON_RIGHT && !g_run) {
+            uint16_t selected = SelectNode(x, y);
+            if (selected != EMPTY) {
+                if (selected == g_nest) { g_nest = EMPTY; }
+                else if (selected == g_food) { g_food = EMPTY; }
+                else if (g_nest == EMPTY) { g_nest = selected; }
+                else if (g_food == EMPTY) { g_food = selected; }
+            }
+        }
     }
 
     return SDL_APP_CONTINUE;
