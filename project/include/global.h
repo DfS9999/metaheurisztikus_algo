@@ -3,17 +3,17 @@
 
 #include <SDL3/SDL.h>
 
-#define CIRCLE_IMG_PATH     "./src/circle.png"
-#define FOOD_IMG_PATH       "./src/circle_outline_yellow.png"
-#define NEST_IMG_PATH       "./src/circle_outline_red.png"
-#define FORAGING_IMG_PATH   "./src/ant.png"
-#define HOMING_IMG_PATH     "./src/ant_yellow.png"
-#define FONT_PATH           "./src/dejavusans.ttf"
+#define CIRCLE_IMG_PATH     "./resources/circle.png"
+#define FOOD_IMG_PATH       "./resources/circle_outline_yellow.png"
+#define NEST_IMG_PATH       "./resources/circle_outline_red.png"
+#define FORAGING_IMG_PATH   "./resources/ant_red.png"
+#define HOMING_IMG_PATH     "./resources/ant_yellow.png"
+#define FONT_PATH           "./resources/dejavusans.ttf"
 
 #define MAX                 (0xFFFF)
 #define EMPTY               (MAX)
-#define WIN_WIDTH           1280
-#define WIN_HEIGHT          960
+#define WIN_WIDTH           1680
+#define WIN_HEIGHT          970
 #define CIRCLE_SIZE         ((int)(WIN_HEIGHT / 32))
 #define CIRCLE_RAD          (CIRCLE_SIZE / 2)
 #define MIN_EDGE_WIDTH      2
@@ -101,15 +101,13 @@ void InitializeGrids(void);
 void InitializeEdges(void);
 void InitializeAnts(void);
 void InitializePaths(void);
-void AddNewNode(int x, int y);
-void AddNewEdge(id a, id b);
-bool AddToGrid(int x, int y);
+void AddNewNode(int, int);
+void AddNewEdge(id, id);
 void FreeNodes(void);
 void FreeGrids(void);
 void FreeEdges(void);
 void FreeAnts(void);
 void FreePaths(void);
-id SearchNodeInArea(int x, int y, int area);
 
 /* rendering functions */
 void RenderNodes(void);
@@ -117,13 +115,13 @@ void RenderAnts(void);
 void RenderNest(void);
 void RenderFood(void);
 void RenderEdges(void);
-void RenderEdgeToMouse(int aX, int aY, int bX, int bY);
-void RenderDebugCircle(int x, int y);
+void RenderEdgeToMouse(int, int, int, int);
+void RenderDebugCircle(int, int);
 
 /* ant colony algorithm's functions */
-void UpdateAnts(float elapsedSecs);
-void EvaporatePheromones(float elapsedSecs);
+void UpdateAnts(float);
+void EvaporatePheromones(float);
 void ResetBaseAlgorithmParams(void);
-void ResetBaseAntParams(id ant);
+void ResetBaseAntParams(id);
 
 #endif //GLOBAL_H

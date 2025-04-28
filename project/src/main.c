@@ -3,7 +3,6 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_image.h>
 #include <SDL3/SDL_ttf.h>
-#define TEXT_BUFFER_LEN 196
 
 /* globals */
 struct nodes_s Nodes;
@@ -24,138 +23,23 @@ static SDL_Texture      * TextureHoming;
 static TTF_Font         * Font;
 static TTF_TextEngine   * TextEngine;
 static TTF_Text         * Text;
+
+#define TEXT_BUFFER_LEN 512
 static char TextBuffer[TEXT_BUFFER_LEN];
 static bool AnimationRunning;
 static bool GraphModifiable;
 static id SelectedNode;
+static uint64_t LastTime = 0; /* timer */
+static float AntTimer = 0.0f; /* timer for ants */
 
-/* timer */
-static uint64_t LastTime = 0;
-/* timer for ants */
-static float AntTimer = 0.0f;
-
-static void Initialize(void) {
-    InitializeNodes();
-    InitializeGrids();
-    InitializeEdges();
-
-    Nest = EMPTY;
-    Food = EMPTY;
-    AnimationRunning = false;
-    GraphModifiable = true;
-    SelectedNode = EMPTY;
-
-    Ants.actives = 0;
-    Ants.count = 1;
-}
-
-static void Restart(void) {
-    FreePaths();
-    FreeAnts();
-
-    InitializePaths();
-    InitializeAnts();
-
-    /* reset pheromones */
-    for (id e = 0; e < Edges.size; e++)
-        Edges.pheromones[e] = PheromoneMin;
-}
-
-static void Pause(void) {
-    AnimationRunning = !AnimationRunning;
-    if (AnimationRunning)
-        LastTime = SDL_GetTicks();
-}
-
-static void Reset(void) {
-    FreeNodes();
-    FreeEdges();
-    FreeGrids();
-    FreePaths();
-    FreeAnts();
-
-    Initialize();
-}
-
-static void SaveGraph(void) {
-    size_t size = (Nodes.size + Edges.size) * 32;
-    char * buffer = SDL_malloc(size);
-    if (!buffer) {
-        SDL_Log("Memory allocation failed at line %d.\n", __LINE__);
-        exit(1);
-    }
-
-    size_t p = 0;
-    for (id n = 0; n < Nodes.size; n++)
-        p += SDL_snprintf(buffer + p, size - p, "N %d %d\n", Nodes.centers[n].x, Nodes.centers[n].y);
-    for (int e = 0; e < Edges.size; e++)
-        p += SDL_snprintf(buffer + p, size - p, "E %d %d\n", Edges.anodes[e], Edges.bnodes[e]);
-
-    p += SDL_snprintf(buffer + p, size - p, "-\n%hu\n%hu\n%d\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n", 
-                     Nest, Food, Ants.count, 
-                     EvaporationRate, EvaporationInterval, PheromoneMin, PheromoneMax, 
-                     Alpha, Beta, Q, AntSpeed);
-
-    char outputPath[64];
-    SDL_snprintf(outputPath, 64, "GRAPH%07llu.txt", SDL_GetTicks());
-
-    if (!SDL_SaveFile(outputPath, buffer, p)) {
-        SDL_Log("Saving graph failed: %s\n", SDL_GetError());
-    } else {
-        SDL_Log("Graph saved as %s", outputPath);
-    }
-    SDL_free(buffer);
-}
-
-static bool LoadGraph(const char * path) {
-    size_t size = 0;
-    char * data = SDL_LoadFile(path, &size);
-
-    if (!size) {
-        SDL_Log("No bytes loaded from the file. %s", SDL_GetError());
-        SDL_free(data);
-        return false;
-    }
-
-    char * l = data;
-    char * end = data + size;
-
-    while (l < end) {
-        char * next = SDL_strchr(l, '\n');
-        if (next) 
-            *next = '\0';
-
-        if (*l == 'N') {
-            int x, y;
-            if (SDL_sscanf(l + 1, "%d %d", &x, &y) == 2) AddNewNode(x, y);
-        } else if (*l == 'E') {
-            int a, b;
-            if (SDL_sscanf(l + 1, "%d %d", &a, &b) == 2) AddNewEdge(a, b);
-        } else if (*l == '-') {
-            l = next + 1;
-            break;
-        } else {
-            SDL_Log("Invalid graph file.\n");
-            SDL_free(data);
-            return false;
-        }
-
-        l = next + 1;
-    }
-
-    if (SDL_sscanf(l, "%hu\n%hu\n%d\n%f\n%f\n%f\n%f\n%f\n%f\n%f\n%f\n", 
-                     &Nest, &Food, &Ants.count, 
-                     &EvaporationRate, &EvaporationInterval, &PheromoneMin, &PheromoneMax, 
-                     &Alpha, &Beta, &Q, &AntSpeed) != 11) {
-        SDL_Log("Invalid graph file.\n");
-        SDL_free(data);
-        return false;
-    }
-
-    SDL_free(data);
-    return true;
-}
-
+static void Initialize(void);
+static void Restart(void);
+static void Pause(void);
+static void Reset(void);
+static void SaveGraph(void);
+static bool LoadGraph(const char *);
+static id   SearchNodeInArea(int, int, int); 
+static bool AddToGrid(int, int);
 
 /**********************************************/
 /************ SDL3 main functions *************/
@@ -209,10 +93,14 @@ SDL_AppResult SDL_AppIterate(void * appstate)
     /* writing the text */
     SDL_snprintf(TextBuffer, 
                  TEXT_BUFFER_LEN, 
-                 "ANT COUNT\n%d\nEVAPORATION RATE\n%.2f\nEVAPORATION INTERVAL\n%.2f\nPHEROMONE MIN\n%.2f\nPHEROMONE MAX\n%.2f\nALPHA\n%.2f\nBETA\n%.2f\nQ\n%.2f\nSPEED\n%.2f\n",
+                 "INCREASE PARAMETER: [n]              (RE)START: ENTER      RESET PARAMETERS: B\n"
+                 "DECREASE PARAMETER: LALT+[n]         PAUSE: P              RESET: R\n"
+                 "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+                 "[1]ANT COUNT=%d   [2]EVAPAPORATION RATE=%.2f   [3]EVAPORATION INTERVAL=%.2f   [4]PHEROMONE MIN=%.2f   [5]PHEROMONE MAX=%.2f\n"
+                 "[6]ALPHA=%.2f   [7]BETA=%.2f   [8]Q=%.2f   [9]SPEED=%.2f\n",
                  Ants.count, EvaporationRate, EvaporationInterval, PheromoneMin, PheromoneMax, Alpha, Beta, Q, AntSpeed);
     TTF_SetTextString(Text, TextBuffer, 0);
-    TTF_DrawRendererText(Text, 10.f, 10.f);
+    TTF_DrawRendererText(Text, 10.f, 5.f);
 
     /* render the line for adding a new edge */
     if (!AnimationRunning && SelectedNode != EMPTY) {
@@ -235,12 +123,12 @@ SDL_AppResult SDL_AppInit(void ** appstate, int argc, char * argv[])
         SDL_Log("Couldn't initialize SDL: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
-    if (!SDL_CreateWindowAndRenderer("main.exe", WIN_WIDTH, WIN_HEIGHT, 0, &Window, &Renderer)) {
+    if (!SDL_CreateWindowAndRenderer("Hangyakolonia", WIN_WIDTH, WIN_HEIGHT, 0, &Window, &Renderer)) {
         SDL_Log("Couldn't create window/renderer: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
-    /* SDL3_ttf for writing text */
+    /* using SDL3_ttf writing text */
     if (!TTF_Init()) {
         SDL_Log("Couldn't initialize SD_TTF: %s", SDL_GetError());
         return SDL_APP_FAILURE;
@@ -306,16 +194,11 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
                         }
 
                         if (validgraph) {
-                            /* saving graph */
-                            SaveGraph();
-                            /* allocate ants' paths */
-                            InitializePaths();
-                            /* initialize number of ants */
-                            InitializeAnts();
-                            /* set AnimationRunning flag on*/
-                            AnimationRunning = true;
-                            /* set GraphModifiable */
-                            GraphModifiable = false;
+                            SaveGraph();                /* saving graph */
+                            InitializePaths();          /* allocate ants' paths */
+                            InitializeAnts();           /* initialize number of ants */
+                            AnimationRunning = true;    /* set AnimationRunning flag on */
+                            GraphModifiable = false;    /* set GraphModifiable flag off */
                         }
                     } else { /* if running, then Restart */ Restart(); } 
                     break;
@@ -431,9 +314,6 @@ void RenderNodes(void) {
 
 void RenderAnts(void) {
     for (int i = 0; i < Ants.actives; i++) {
-//        if (Ants.colony[i].src >= Nodes.size || Ants.colony[i].dest >= Nodes.size)
-//           continue;
-
         coord_t src  = Nodes.centers[Ants.colony[i].src];
         coord_t dest = Nodes.centers[Ants.colony[i].dest];
         int x = src.x + (dest.x - src.x) * Ants.colony[i].progress - ANT_RAD;
@@ -802,8 +682,8 @@ void InitializeAnts() {
         SDL_Log("Memory allocation failed at line %d.\n", __LINE__);
         exit(1);
     }
-    Ants.probabilitiesBuffer = SDL_malloc((Edges.size + 1) * sizeof(*Ants.probabilitiesBuffer)) ;
-    Ants.edgesBuffer = SDL_malloc((Edges.size + 1) * sizeof(*Ants.edgesBuffer));
+    Ants.probabilitiesBuffer = SDL_malloc((Nodes.size + 1) * sizeof(*Ants.probabilitiesBuffer)) ;
+    Ants.edgesBuffer = SDL_malloc((Nodes.size + 1) * sizeof(*Ants.edgesBuffer));
     if (!Ants.probabilitiesBuffer || !Ants.edgesBuffer) {
         SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
         exit(1);
@@ -818,7 +698,7 @@ void FreeAnts(void) {
     if (!Ants.edgesBuffer) SDL_free(Ants.edgesBuffer);
 }
 
-/* Paths - runs only after the graph has been created! */
+/* Paths - runs only after the graph has been created */
 void InitializePaths(void) {
     int size  = Edges.size;
     int count = Ants.count;
@@ -836,8 +716,53 @@ void FreePaths(void) {
     if (!Paths.edges) SDL_free(Paths.edges);
 }
 
+/**********************************************/
+/************* Helper functions ***************/
+/**********************************************/
+static void Initialize(void) {
+    InitializeNodes();
+    InitializeGrids();
+    InitializeEdges();
+
+    Nest = EMPTY;
+    Food = EMPTY;
+    AnimationRunning = false;
+    GraphModifiable = true;
+    SelectedNode = EMPTY;
+
+    Ants.actives = 0;
+    Ants.count = 1;
+}
+
+static void Restart(void) {
+    FreePaths();
+    FreeAnts();
+
+    InitializePaths();
+    InitializeAnts();
+
+    for (id e = 0; e < Edges.size; e++) /* reset pheromones */
+        Edges.pheromones[e] = PheromoneMin;
+}
+
+static void Pause(void) {
+    AnimationRunning = !AnimationRunning;
+    if (AnimationRunning)
+        LastTime = SDL_GetTicks();
+}
+
+static void Reset(void) {
+    FreeNodes();
+    FreeEdges();
+    FreeGrids();
+    FreePaths();
+    FreeAnts();
+
+    Initialize();
+}
+
 /* Checks is there a node in the area, returns its idx, or EMPTY */
-id SearchNodeInArea(int x, int y, int area) {
+static id SearchNodeInArea(int x, int y, int area) {
     if (x < Grids.pxsize || x > WIN_WIDTH - Grids.pxsize || y < Grids.pxsize || y > WIN_HEIGHT - Grids.pxsize) {
        return EMPTY;
     }
@@ -863,7 +788,7 @@ id SearchNodeInArea(int x, int y, int area) {
 }
 
 /* Adds the current node to the grid of the pos */
-bool AddToGrid(int x, int y) {
+static bool AddToGrid(int x, int y) {
     int g = (y / Grids.pxsize) * Grids.width + x / Grids.pxsize;
     for (int i = 0; i < 4; i++) {
         if (Grids.nodes[g][i] == EMPTY) { 
@@ -872,5 +797,87 @@ bool AddToGrid(int x, int y) {
         }
     }
     return false;
+}
+
+/**********************************************/
+/********* Saving and loading graph ***********/
+/**********************************************/
+static void SaveGraph(void) {
+    size_t size = (Nodes.size + Edges.size) * 32;
+    char * buffer = SDL_malloc(size);
+    if (!buffer) {
+        SDL_Log("Memory allocation failed at line %d.\n", __LINE__);
+        exit(1);
+    }
+
+    size_t p = 0;
+    for (id n = 0; n < Nodes.size; n++)
+        p += SDL_snprintf(buffer + p, size - p, "N %d %d\n", Nodes.centers[n].x, Nodes.centers[n].y);
+    for (int e = 0; e < Edges.size; e++)
+        p += SDL_snprintf(buffer + p, size - p, "E %d %d\n", Edges.anodes[e], Edges.bnodes[e]);
+
+    p += SDL_snprintf(buffer + p, size - p, "-\n%hu\n%hu\n%d\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n%.2f\n", 
+                     Nest, Food, Ants.count, 
+                     EvaporationRate, EvaporationInterval, PheromoneMin, PheromoneMax, 
+                     Alpha, Beta, Q, AntSpeed);
+
+    char outputPath[64];
+    SDL_snprintf(outputPath, 64, "GRAPH%07llu.txt", SDL_GetTicks());
+
+    if (!SDL_SaveFile(outputPath, buffer, p)) {
+        SDL_Log("Saving graph failed: %s\n", SDL_GetError());
+    } else {
+        SDL_Log("Graph saved as %s", outputPath);
+    }
+    SDL_free(buffer);
+}
+
+static bool LoadGraph(const char * path) {
+    size_t size = 0;
+    char * data = SDL_LoadFile(path, &size);
+
+    if (!size) {
+        SDL_Log("No bytes loaded from the file. %s", SDL_GetError());
+        SDL_free(data);
+        return false;
+    }
+
+    char * l = data;
+    char * end = data + size;
+
+    while (l < end) {
+        char * next = SDL_strchr(l, '\n');
+        if (next) 
+            *next = '\0';
+
+        if (*l == 'N') {
+            int x, y;
+            if (SDL_sscanf(l + 1, "%d %d", &x, &y) == 2) AddNewNode(x, y);
+        } else if (*l == 'E') {
+            int a, b;
+            if (SDL_sscanf(l + 1, "%d %d", &a, &b) == 2) AddNewEdge(a, b);
+        } else if (*l == '-') {
+            l = next + 1;
+            break;
+        } else {
+            SDL_Log("Invalid graph file.\n");
+            SDL_free(data);
+            return false;
+        }
+
+        l = next + 1;
+    }
+
+    if (SDL_sscanf(l, "%hu\n%hu\n%d\n%f\n%f\n%f\n%f\n%f\n%f\n%f\n%f\n", 
+                     &Nest, &Food, &Ants.count, 
+                     &EvaporationRate, &EvaporationInterval, &PheromoneMin, &PheromoneMax, 
+                     &Alpha, &Beta, &Q, &AntSpeed) != 11) {
+        SDL_Log("Invalid graph file.\n");
+        SDL_free(data);
+        return false;
+    }
+
+    SDL_free(data);
+    return true;
 }
 

@@ -1,6 +1,5 @@
 #include <global.h>
 
-/* baseline parameter values for Ant Colony algorithm */
 float EvaporationRate;
 float EvaporationInterval;
 float Alpha;
@@ -12,18 +11,33 @@ float PheromoneMax;
 
 static float evaporationTimer = 0.0f;
 
-static inline id GetOtherNodeOnEdge(id edge, id node) {
-    return (Edges.anodes[edge] == node) ? Edges.bnodes[edge] : Edges.anodes[edge];
-}
+/* helper functions */
+static inline id   SelectEdgeAtNode(id, id);
+static inline void DepositPheromone(id, id);
+static inline void Homing(id);
+static inline void Foraging(id);
+static inline void ForagingGetNext(id);
+static inline id GetOtherNodeOnEdge(id, id);
+static inline int GetPathStart(id);
 
-static inline int GetPathStart(id ant) {
-    return ant * Paths.chunksize;
+void UpdateAnts(float elapsedSecs) {
+    for (id a = 0; a < Ants.actives; a++) {
+        if (Ants.colony[a].progress >= 1.0f) { /* arrived to a node */
+            Ants.colony[a].src = Ants.colony[a].dest;
+            if (Ants.colony[a].foraging) Foraging(a); 
+            else Homing(a);
+        
+        } else { /* on edge */
+            float length = Edges.lengths[Ants.colony[a].edge];
+            Ants.colony[a].progress += (elapsedSecs * AntSpeed) / length;
+        }
+    }
 }
 
 void ResetBaseAntParams(id a) {
     Ants.colony[a].progress     = 1.0f;
     Ants.colony[a].pathlength   = 0.0f;
-    Ants.colony[a].src          = Nest;//EMPTY;
+    Ants.colony[a].src          = Nest;
     Ants.colony[a].dest         = Nest;
     Ants.colony[a].edge         = EMPTY;
     Ants.colony[a].pathidx      = 0;
@@ -55,9 +69,8 @@ void EvaporatePheromones(float elapsedSecs) {
     }
 }
 
-/* picking next edge by probability distribution, do not select just travelled edge if possible */ 
+/* picking next edge by probability distribution, exclude source edge if possible */ 
 static inline id SelectEdgeAtNode(id node, id prevEdge) {
-    /* save valid edges to pick from the node */
     id count   = Nodes.esizes[node];
     id * edges = Nodes.edges[node];
     
@@ -65,7 +78,7 @@ static inline id SelectEdgeAtNode(id node, id prevEdge) {
     float totalProbability = 0.0f;
     for (int i = 0; i < count; i++) {
         id e = edges[i];
-        if (e == prevEdge) { /* just came from here - exclude by default */
+        if (e == prevEdge) { /* exclude source edge by default */
             continue;
         }
 
@@ -106,9 +119,6 @@ static inline id SelectEdgeAtNode(id node, id prevEdge) {
 static inline void DepositPheromone(id edge, id ant) {
     float value = Q / Ants.colony[ant].pathlength;
     Edges.pheromones[edge] += value;
-    
-//SDL_Log("Deposited peheromone of %f onto edge [%d]. Now its value is %f.\n", value, edge, Edges.pheromones[edge]);
-
 }
 
 static inline void Homing(id a) {
@@ -120,8 +130,6 @@ static inline void Homing(id a) {
     if (Ants.colony[a].pathidx == 0) { /* finished backtracking */
         if (Ants.colony[a].src == Nest) {
             ResetBaseAntParams(a);
-        //    Ants.colony[a].foraging = true;        
-         //   Ants.colony[a].pathlength = 0;
         } else { /* finished backtracking - travel last edge to the node */
             DepositPheromone(e, a);
             Ants.colony[a].dest = Nest;
@@ -135,7 +143,7 @@ static inline void Homing(id a) {
     }
 }
 
-static inline void ForagingAntUpdater(id a) {
+static inline void ForagingGetNext(id a) {
     if (--Ants.colony[a].TTL <= 0) {
         ResetBaseAntParams(a);
         return;
@@ -161,7 +169,7 @@ static inline void Foraging(id a) {
     if (n == Nest) {
         if (Ants.colony[a].pathidx == 0) { /* new path start */
             Ants.colony[a].edge = EMPTY;
-            ForagingAntUpdater(a);
+            ForagingGetNext(a);
         } else { /* returned back without finding Food */
             Ants.colony[a].pathidx = 0;
             Ants.colony[a].pathlength = 0;
@@ -183,27 +191,14 @@ static inline void Foraging(id a) {
                 break;
             }
         }
-        ForagingAntUpdater(a);
+        ForagingGetNext(a);
     }
 }
 
-void UpdateAnts(float elapsedSecs) {
-    for (id a = 0; a < Ants.actives; a++) {
-        if (Ants.colony[a].progress >= 1.0f) { /* arrived to a node */
-            Ants.colony[a].src = Ants.colony[a].dest;
-            if (Ants.colony[a].foraging) Foraging(a); 
-            else Homing(a);
-        
-        } else { /* on edge */
-            float length = Edges.lengths[Ants.colony[a].edge];
-            Ants.colony[a].progress += (elapsedSecs * AntSpeed) / length;
-        }
-    }
+static inline id GetOtherNodeOnEdge(id edge, id node) {
+    return (Edges.anodes[edge] == node) ? Edges.bnodes[edge] : Edges.anodes[edge];
 }
 
-/*
-#ifdef DEBUG
-SDL_Log("->H: FORAGING=%d \tPATHIDX=%d \tPROGRESS=%.2f \tSRC=%d \tDEST=%d \tEDGE=%d \tPATHLENGTH=%.2f\n", Ants.colony[a].foraging, Ants.colony[a].pathidx, Ants.colony[a].progress, Ants.colony[a].src, Ants.colony[a].dest, Ants.colony[a].edge, Ants.colony[a].pathlength);
-SDL_Log("->F: FORAGING=%d \tPATHIDX=%d \tPROGRESS=%.2f \tSRC=%d \tDEST=%d \tEDGE=%d \tPATHLENGTH=%.2f\n", Ants.colony[a].foraging, Ants.colony[a].pathidx, Ants.colony[a].progress, Ants.colony[a].src, Ants.colony[a].dest, Ants.colony[a].edge, Ants.colony[a].pathlength);
-#endif
-*/
+static inline int GetPathStart(id ant) {
+    return ant * Paths.chunksize;
+}
