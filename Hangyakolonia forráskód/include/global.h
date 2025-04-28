@@ -51,7 +51,7 @@ struct edges_s {
 struct paths_s {
     id         * nodes;
     id         * edges;
-    id           chunksize;
+    int          chunksize;
 };
 
 struct ants_s {

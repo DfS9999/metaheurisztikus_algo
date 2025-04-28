@@ -31,6 +31,7 @@ static bool GraphModifiable;
 static id SelectedNode;
 static uint64_t LastTime = 0; /* timer */
 static float AntTimer = 0.0f; /* timer for ants */
+static float AntInterval = 0.1f;
 
 static void Initialize(void);
 static void Restart(void);
@@ -53,8 +54,6 @@ SDL_AppResult SDL_AppIterate(void * appstate)
     float elapsedSecs = (currentTime - LastTime) / 1000.f;
     LastTime = currentTime;
 
-    float antInterval = 0.3f;
-
     /* background */
     SDL_SetRenderDrawColor(Renderer, 240, 240, 240, 255);
     SDL_RenderClear(Renderer);
@@ -71,8 +70,8 @@ SDL_AppResult SDL_AppIterate(void * appstate)
         /* seperated start */
         if (Ants.actives < Ants.count) {
             AntTimer += elapsedSecs;
-            if (AntTimer >= antInterval) {
-                AntTimer -= antInterval;
+            if (AntTimer >= AntInterval) {
+                AntTimer -= AntInterval;
                 Ants.actives++;
             }
         }
@@ -282,7 +281,7 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
                             Food = EMPTY;
                         } else if (Nest == EMPTY && GraphModifiable) { 
                             Nest = selection; 
-                        } else if (Food == EMPTY) { 
+                        } else if (Food == EMPTY && selection != Nest) { 
                             Food = selection; 
                         }
                     }
@@ -316,6 +315,7 @@ void RenderAnts(void) {
     for (int i = 0; i < Ants.actives; i++) {
         coord_t src  = Nodes.centers[Ants.colony[i].src];
         coord_t dest = Nodes.centers[Ants.colony[i].dest];
+
         int x = src.x + (dest.x - src.x) * Ants.colony[i].progress - ANT_RAD;
         int y = src.y + (dest.y - src.y) * Ants.colony[i].progress - ANT_RAD;
         SDL_Texture * texture = Ants.colony[i].foraging ? TextureForaging : TextureHoming;
@@ -346,7 +346,7 @@ void RenderEdges(void) {
 
         float oldWidth = Edges.widths[e];
         float newWidth = MIN_EDGE_WIDTH + ratio * (MAX_EDGE_WIDTH - MIN_EDGE_WIDTH);
-        if (oldWidth != newWidth) {
+        if (SDL_fabsf(oldWidth - newWidth) > 0.001f) {
             Edges.widths[e] = newWidth;
 
             /* calculate new vertices for the edge */
@@ -633,8 +633,8 @@ void AddNewEdge(id a, id b) {
     float dX = bX - aX;
     float dY = bY - aY;
     float length = SDL_sqrt(dX * dX + dY * dY);
-    float pX = (-dY / length) * MIN_EDGE_WIDTH;
-    float pY = ( dX / length) * MIN_EDGE_WIDTH;
+    float pX = (-dY / length) * (MIN_EDGE_WIDTH / 2);
+    float pY = ( dX / length) * (MIN_EDGE_WIDTH / 2);
     
     SDL_Vertex v0 = { .position = { aX + pX, aY + pY }, .color = Edges.color };
     SDL_Vertex v1 = { .position = { bX + pX, bY + pY }, .color = Edges.color };
@@ -682,8 +682,8 @@ void InitializeAnts() {
         SDL_Log("Memory allocation failed at line %d.\n", __LINE__);
         exit(1);
     }
-    Ants.probabilitiesBuffer = SDL_malloc((Nodes.size + 1) * sizeof(*Ants.probabilitiesBuffer)) ;
-    Ants.edgesBuffer = SDL_malloc((Nodes.size + 1) * sizeof(*Ants.edgesBuffer));
+    Ants.probabilitiesBuffer = SDL_malloc((Edges.size + 1) * sizeof(*Ants.probabilitiesBuffer)) ;
+    Ants.edgesBuffer = SDL_malloc((Edges.size + 1) * sizeof(*Ants.edgesBuffer));
     if (!Ants.probabilitiesBuffer || !Ants.edgesBuffer) {
         SDL_Log("Memory reallocation failed at line %d.\n", __LINE__);
         exit(1);
@@ -700,7 +700,7 @@ void FreeAnts(void) {
 
 /* Paths - runs only after the graph has been created */
 void InitializePaths(void) {
-    int size  = Edges.size;
+    int size  = Nodes.size;
     int count = Ants.count;
     Paths.chunksize = size;
     Paths.nodes     = SDL_malloc(size * count * sizeof(*Paths.nodes));

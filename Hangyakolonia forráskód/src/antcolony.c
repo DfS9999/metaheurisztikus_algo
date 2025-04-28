@@ -122,15 +122,14 @@ static inline void DepositPheromone(id edge, id ant) {
 }
 
 static inline void Homing(id a) {
-    id p = GetPathStart(a) + Ants.colony[a].pathidx;
-    id e = Paths.edges[p];
-
+    int p = GetPathStart(a) + Ants.colony[a].pathidx;
+    id e  = Paths.edges[p];
     Ants.colony[a].edge = e;
 
     if (Ants.colony[a].pathidx == 0) { /* finished backtracking */
         if (Ants.colony[a].src == Nest) {
             ResetBaseAntParams(a);
-        } else { /* finished backtracking - travel last edge to the node */
+        } else { /* finished backtracking - travel last edge to the nest */
             DepositPheromone(e, a);
             Ants.colony[a].dest = Nest;
             Ants.colony[a].progress = 0.0f;
@@ -157,7 +156,8 @@ static inline void ForagingGetNext(id a) {
     Ants.colony[a].dest = nextDest;
     Ants.colony[a].pathlength += Edges.lengths[nextEdge];
 
-    id p = GetPathStart(a) + Ants.colony[a].pathidx++;
+    int p = GetPathStart(a) + Ants.colony[a].pathidx++;
+
     Paths.edges[p] = nextEdge;
     Paths.nodes[p] = nextDest;
 
@@ -179,9 +179,9 @@ static inline void Foraging(id a) {
         Ants.colony[a].pathidx--;
     } else { /* at other node */
         float newLength = 0.f; /* unloop */
-        id start = GetPathStart(a);
+        int start = GetPathStart(a);
         for (id i = 0; i < Ants.colony[a].pathidx; i++) { 
-            id p = start + i;
+            int p = start + i;
             id e = Paths.edges[p];
             newLength += Edges.lengths[e];
             if (Ants.colony[a].src == Paths.nodes[p]) {
