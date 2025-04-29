@@ -32,15 +32,18 @@ static id SelectedNode;
 static uint64_t LastTime = 0; /* timer */
 static float AntTimer = 0.0f; /* timer for ants */
 static float AntInterval = 0.1f;
+static bool ShowAnts = true;
 
 static void Initialize(void);
 static void Restart(void);
 static void Pause(void);
 static void Reset(void);
+static void SetAllAntsActive(void);
 static void SaveGraph(void);
 static bool LoadGraph(const char *);
 static id   SearchNodeInArea(int, int, int); 
 static bool AddToGrid(int, int);
+static void ToggleAntsRender(void);
 
 /**********************************************/
 /************ SDL3 main functions *************/
@@ -84,7 +87,9 @@ SDL_AppResult SDL_AppIterate(void * appstate)
     }
     
     /* rendering the ants */
-    RenderAnts();
+    if (ShowAnts) {
+        RenderAnts();
+    }
 
     /* rendering the nodes */
     RenderNodes();
@@ -92,11 +97,11 @@ SDL_AppResult SDL_AppIterate(void * appstate)
     /* writing the text */
     SDL_snprintf(TextBuffer, 
                  TEXT_BUFFER_LEN, 
-                 "INCREASE PARAMETER: [n]              (RE)START: ENTER      RESET PARAMETERS: B\n"
-                 "DECREASE PARAMETER: LALT+[n]         PAUSE: P              RESET: R\n"
+                 "INCREASE PARAMETER: [n]                    (RE)START: ENTER        RESET PARAMETERS: B            SET ALL ANTS ACTIVE: A\n"
+                 "DECREASE PARAMETER: LALT+[n]         PAUSE: P                      RESET: R                                  HIDE/SHOW ANTS: H\n"
                  "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
                  "[1]ANT COUNT=%d   [2]EVAPAPORATION RATE=%.2f   [3]EVAPORATION INTERVAL=%.2f   [4]PHEROMONE MIN=%.2f   [5]PHEROMONE MAX=%.2f\n"
-                 "[6]ALPHA=%.2f   [7]BETA=%.2f   [8]Q=%.2f   [9]SPEED=%.2f\n",
+                 "[6]ALPHA=%.2f      [7]BETA=%.2f   [8]Q=%.2f   [9]SPEED=%.2f\n",
                  Ants.count, EvaporationRate, EvaporationInterval, PheromoneMin, PheromoneMax, Alpha, Beta, Q, AntSpeed);
     TTF_SetTextString(Text, TextBuffer, 0);
     TTF_DrawRendererText(Text, 10.f, 5.f);
@@ -203,6 +208,12 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
                     break;
                 case SDL_SCANCODE_R: Reset(); break;
                 case SDL_SCANCODE_B: ResetBaseAlgorithmParams(); break;
+                case SDL_SCANCODE_H: ToggleAntsRender(); break;
+                case SDL_SCANCODE_A: 
+                    if (AnimationRunning) {
+                        SetAllAntsActive();
+                    } 
+                    break;
                 case SDL_SCANCODE_P: 
                     if (!GraphModifiable) {
                         Pause(); 
@@ -216,7 +227,7 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
                     break;
                 case SDL_SCANCODE_2: 
                     if (kbs[SDL_SCANCODE_LALT] && EvaporationRate > 0.02f)  EvaporationRate -= 0.01f;
-                    else if (EvaporationRate < 1.0f)                        EvaporationRate += 0.01f;
+                    else if (EvaporationRate < 0.99f)                        EvaporationRate += 0.01f;
                     break;
                 case SDL_SCANCODE_3: 
                     if (kbs[SDL_SCANCODE_LALT] && EvaporationInterval > 0.2f)   EvaporationInterval -= 0.1f;
@@ -759,6 +770,15 @@ static void Reset(void) {
     FreeAnts();
 
     Initialize();
+}
+
+static void SetAllAntsActive(void) {
+    if (Ants.actives < Ants.count) Ants.actives = Ants.count;
+    SDL_Log("All ants are active.\n");
+}
+
+static void ToggleAntsRender(void) {
+    ShowAnts ^= 1;
 }
 
 /* Checks is there a node in the area, returns its idx, or EMPTY */
