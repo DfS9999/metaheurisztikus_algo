@@ -8,6 +8,7 @@ float Q;
 float AntSpeed;
 float PheromoneMin;
 float PheromoneMax;
+float Weight;
 
 static float evaporationTimer = 0.0f;
 
@@ -34,7 +35,7 @@ void UpdateAnts(float elapsedSecs) {
     }
 }
 
-void ResetBaseAntParams(id a) {
+inline void ResetBaseAntParams(id a) {
     Ants.colony[a].progress     = 1.0f;
     Ants.colony[a].pathlength   = 0.0f;
     Ants.colony[a].src          = Nest;
@@ -45,7 +46,7 @@ void ResetBaseAntParams(id a) {
     Ants.colony[a].TTL          = Nodes.size * 2;
 }
 
-void ResetBaseAlgorithmParams(void) {
+inline void ResetBaseAlgorithmParams(void) {
     EvaporationRate     = 0.1f;   
     EvaporationInterval = 1.0f; /* seconds */
     Alpha               = 1.0f;   
@@ -54,6 +55,7 @@ void ResetBaseAlgorithmParams(void) {
     AntSpeed            = 100.0f;
     PheromoneMin        = 0.1f;
     PheromoneMax        = 15.0f;
+    Weight              = 1.0f;
 }
 
 /* updating the edges' pheromone values */
@@ -82,7 +84,6 @@ static inline id SelectEdgeAtNode(id node, id prevEdge) {
             continue;
         }
 
-        /* calculate the probabilities with the Ant Colony algorithm for every edge */
         float pheromone = SDL_powf(Edges.pheromones[e], Alpha);
         float heuristic = SDL_powf((1.0f / Edges.lengths[e]), Beta);
         float probability = pheromone * heuristic;
@@ -117,7 +118,7 @@ static inline id SelectEdgeAtNode(id node, id prevEdge) {
 }
 
 static inline void DepositPheromone(id edge, id ant) {
-    float value = Q / Ants.colony[ant].pathlength;
+    float value = Q / SDL_powf(Ants.colony[ant].pathlength, Weight);
     Edges.pheromones[edge] += value;
 }
 

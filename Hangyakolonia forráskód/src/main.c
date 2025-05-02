@@ -101,8 +101,8 @@ SDL_AppResult SDL_AppIterate(void * appstate)
                  "DECREASE PARAMETER: LALT+[n]         PAUSE: P                      RESET: R                                  HIDE/SHOW ANTS: H\n"
                  "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
                  "[1]ANT COUNT=%d   [2]EVAPAPORATION RATE=%.2f   [3]EVAPORATION INTERVAL=%.2f   [4]PHEROMONE MIN=%.2f   [5]PHEROMONE MAX=%.2f\n"
-                 "[6]ALPHA=%.2f      [7]BETA=%.2f   [8]Q=%.2f   [9]SPEED=%.2f\n",
-                 Ants.count, EvaporationRate, EvaporationInterval, PheromoneMin, PheromoneMax, Alpha, Beta, Q, AntSpeed);
+                 "[6]ALPHA=%.2f      [7]BETA=%.2f   [8]Q=%.2f   [9]SPEED=%.2f     [0]WEIGHT=%.2f\n",
+                 Ants.count, EvaporationRate, EvaporationInterval, PheromoneMin, PheromoneMax, Alpha, Beta, Q, AntSpeed, Weight);
     TTF_SetTextString(Text, TextBuffer, 0);
     TTF_DrawRendererText(Text, 10.f, 5.f);
 
@@ -257,6 +257,14 @@ SDL_AppResult SDL_AppEvent(void * appstate, SDL_Event * event)
                     if (kbs[SDL_SCANCODE_LALT] && AntSpeed > 2.0f)      AntSpeed -= 1.0f;
                     else                                                AntSpeed += 1.0f;
                     break;
+                case SDL_SCANCODE_0: {
+                    float step = 0.01f;
+                    float min = 1.0f;
+                    if (kbs[SDL_SCANCODE_LALT]) {
+                        if (Weight - step >= min)                       Weight -= step;
+                    } else                                              Weight += step;
+                    break;
+                }
                 default:
                     break;
             }

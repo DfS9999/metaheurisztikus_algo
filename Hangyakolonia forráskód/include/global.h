@@ -94,6 +94,7 @@ extern float Q;
 extern float AntSpeed;
 extern float PheromoneMin;
 extern float PheromoneMax;
+extern float Weight;
 
 /* memory handling functions */
 void InitializeNodes(void);
